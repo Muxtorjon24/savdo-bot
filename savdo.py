@@ -1,123 +1,192 @@
 import os
 import asyncio
 from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher, types, Router, F
+
+from aiogram import Bot, Dispatcher, types, Router
 from aiogram.filters import Command
+from aiogram.enums import ContentType
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+# ================== ENV ==================
 load_dotenv()
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-raw_admin = os.getenv("ADMIN_ID", "6269872662")
-raw_channel = os.getenv("CHANNEL_ID", "-1002022910644")
-ADMIN_ID = int(raw_admin)
-CHANNEL_ID = int(raw_channel)
-PAYMENT_CARD = os.getenv("PAYMENT_CARD", "9860 1701 0904 2573")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+
+if not BOT_TOKEN or not CHANNEL_ID or not ADMIN_ID:
+    raise RuntimeError("❌ .env faylda BOT_TOKEN / CHANNEL_ID / ADMIN_ID yo‘q!")
+
+PAYMENT_CARD = "9860 1701 0904 2573"
+
+# ================== PRODUCTS ==================
 PRODUCTS = {
     "MF1": {"name": "Daraxt", "price": 6000, "max_quantity": 20, "post_id": 454},
     "MF2": {"name": "Daraxt", "price": 4000, "max_quantity": 10, "post_id": 455},
     "MF3": {"name": "Daraxt", "price": 4000, "max_quantity": 15, "post_id": 456},
     "MF4": {"name": "Daraxt", "price": 5000, "max_quantity": 10, "post_id": 457},
-    "MF5": {"name": "Daraxt", "price": 4000, "max_quantity": 10, "post_id": 458},
-    "MF6": {"name": "Daraxt", "price": 3000, "max_quantity": 10, "post_id": 459},
-    "MF7": {"name": "Daraxt", "price": 2000, "max_quantity": 20, "post_id": 460},
 }
-USER_ORDERS = {}
+
+# ================== BOT ==================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
+
+# ================== STATES ==================
 class OrderStates(StatesGroup):
     waiting_for_product_id = State()
     waiting_for_quantity = State()
     waiting_for_payment_proof = State()
-def get_main_menu():
-    buttons = [
-        [
-            InlineKeyboardButton(text="👤 Mening holatim", callback_data="my_status"),
-            InlineKeyboardButton(text="❓ Yordam", callback_data="help")
-        ],
-        [InlineKeyboardButton(text="🛍️ Yangi buyurtma berish", callback_data="new_order")]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-@router.message(Command("start"))
+    admin_adding_product = State()
+
+# ================== START ==================
+@router.message(Command("start", "neworder"))
 async def start_command(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("Assalomu alaykum! Kerakli bo'limni tanlang:", reply_markup=get_main_menu())
-@router.callback_query(F.data == "new_order")
-async def start_new_order(call: types.CallbackQuery, state: FSMContext):
+    await message.answer(
+        "Assalomu alaykum 😊\n\n"
+        "Buyurtma berish uchun tovar ID sini kiriting.\n"
+        "Misol: <b>MF1</b>",
+        parse_mode="HTML"
+    )
     await state.set_state(OrderStates.waiting_for_product_id)
-    await call.message.edit_text("Mahsulot ID sini kiriting (Masalan: MF1):", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back")]]))
+
+# ================== PRODUCT ID ==================
 @router.message(OrderStates.waiting_for_product_id)
-async def id_received(message: types.Message, state: FSMContext):
-    p_id = message.text.strip().upper()
-    if p_id not in PRODUCTS:
-        await message.answer("Xato ID! Qayta kiriting (MF1-MF7):")
+async def product_id_received(message: types.Message, state: FSMContext):
+    product_id = message.text.strip().upper()
+
+    if product_id not in PRODUCTS:
+        await message.answer("❌ Bunday tovar yo‘q. Qayta urinib ko‘ring:")
         return
-    product = PRODUCTS[p_id]
-    await state.update_data(p_id=p_id, p_name=product['name'], p_price=product['price'], max_qty=product['max_quantity'])
+
+    product = PRODUCTS[product_id]
+
     try:
-        await bot.forward_message(message.chat.id, CHANNEL_ID, product["post_id"])
-    except Exception as e:
-        print(f"Forward xatosi: {e}")
-        await message.answer(f"📦 {product['name']}\nNarxi: {product['price']:,} UZS")
-    await message.answer(f"Nechta buyurtma qilasiz? (Maks: {product['max_quantity']})")
+        await bot.forward_message(
+            chat_id=message.from_user.id,
+            from_chat_id=CHANNEL_ID,
+            message_id=product["post_id"]
+        )
+    except Exception:
+        await message.answer(
+            f"<b>{product['name']}</b>\nNarxi: {product['price']:,} UZS",
+            parse_mode="HTML"
+        )
+
+    await message.answer(
+        f"Nechta buyurtma qilasiz?\nMaksimal: <b>{product['max_quantity']}</b>",
+        parse_mode="HTML"
+    )
+
+    await state.update_data(product_id=product_id, product=product)
     await state.set_state(OrderStates.waiting_for_quantity)
+
+# ================== QUANTITY ==================
 @router.message(OrderStates.waiting_for_quantity)
-async def qty_received(message: types.Message, state: FSMContext):
+async def quantity_received(message: types.Message, state: FSMContext):
     if not message.text.isdigit():
-        await message.answer("Faqat raqam kiriting:")
+        await message.answer("Faqat son kiriting:")
         return
-    qty = int(message.text)
+
+    quantity = int(message.text)
     data = await state.get_data()
-    if qty > data['max_qty']:
-        await message.answer("Maksimum sonidan ko'p!")
+    product = data["product"]
+
+    if not 1 <= quantity <= product["max_quantity"]:
+        await message.answer(f"1–{product['max_quantity']} oralig‘ida kiriting:")
         return
-    total = qty * data['p_price']
-    await state.update_data(qty=qty, total=total)
-    await message.answer(f"Jami summa: {total:,} UZS\n💳 Karta: `{PAYMENT_CARD}`\nTo'lov qilib, chek rasmida yuboring.", parse_mode="Markdown")
+
+    total_price = quantity * product["price"]
+
+    await message.answer(
+        f"💳 To‘lov qiling:\n<code>{PAYMENT_CARD}</code>\n\n"
+        f"Jami: <b>{total_price:,} UZS</b>\n\n"
+        f"Chekni rasm qilib yuboring.",
+        parse_mode="HTML"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="✅ Tasdiqlash",
+            callback_data=f"confirm_{message.from_user.id}_{data['product_id']}_{quantity}"
+        )],
+        [InlineKeyboardButton(
+            text="❌ Rad etish",
+            callback_data=f"reject_{message.from_user.id}"
+        )]
+    ])
+
+    admin_msg = await bot.send_message(
+        ADMIN_ID,
+        f"🆕 BUYURTMA\n\n"
+        f"👤 {message.from_user.full_name}\n"
+        f"🆔 {data['product_id']}\n"
+        f"📦 {quantity} dona\n"
+        f"💰 {total_price:,} UZS\n\n"
+        f"⏳ Chek kutilmoqda...",
+        reply_markup=kb
+    )
+
+    await state.update_data(
+        admin_msg_id=admin_msg.message_id,
+        quantity=quantity,
+        total_price=total_price,
+        user_id=message.from_user.id
+    )
     await state.set_state(OrderStates.waiting_for_payment_proof)
-@router.message(OrderStates.waiting_for_payment_proof, F.photo)
-async def payment_sent(message: types.Message, state: FSMContext):
+
+# ================== PAYMENT PROOF ==================
+@router.message(OrderStates.waiting_for_payment_proof, lambda m: m.content_type == ContentType.PHOTO)
+async def payment_proof_received(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    user_id = message.from_user.id
-    if user_id not in USER_ORDERS: USER_ORDERS[user_id] = []
-    order_idx = len(USER_ORDERS[user_id])
-    USER_ORDERS[user_id].append({"name": data['p_name'], "qty": data['qty'], "status": "⏳ Kutilmoqda"})
-    try:
-        admin_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"done_{user_id}_{order_idx}")]])
-        await bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=f"🆕 Buyurtma!\nUser: {message.from_user.full_name}\nMahsulot: {data['p_name']}\nSumma: {data['total']:,} UZS", reply_markup=admin_kb)
-    except Exception as e:
-        print(f"Admin ga yuborish xatosi: {e}")
-    await message.answer("✅ Chek adminga yuborildi.", reply_markup=get_main_menu())
+
+    await bot.forward_message(ADMIN_ID, message.chat.id, message.message_id)
+
+    await message.answer("✅ Chek qabul qilindi. Tekshirilmoqda...")
     await state.clear()
-@router.callback_query(F.data.startswith("done_"))
-async def confirm_order(call: types.CallbackQuery):
-    _, uid, idx = call.data.split("_")
-    uid, idx = int(uid), int(idx)
-    if uid in USER_ORDERS:
-        USER_ORDERS[uid][idx]["status"] = "✅ Tasdiqlandi"
-        try: await bot.send_message(uid, f"Sizning buyurtmangiz tasdiqlandi! ✅")
-        except: pass
-    await call.message.edit_caption(caption=call.message.caption + "\n\n✅ TASDIQLANDI")
-@router.callback_query(F.data == "back")
-async def back(call: types.CallbackQuery, state: FSMContext):
-    await state.clear()
-    await call.message.edit_text("Asosiy menyu:", reply_markup=get_main_menu())
-@router.callback_query(F.data == "my_status")
-async def my_status(call: types.CallbackQuery):
-    user_id = call.from_user.id
-    if user_id not in USER_ORDERS or not USER_ORDERS[user_id]:
-        await call.message.edit_text("Sizning buyurtmalaringiz yoʻq.\nYangi buyurtma berish uchun tugmani bosing.", reply_markup=get_main_menu())
-        return
-    orders_list = "\n".join([f"{i+1}. {order['name']} - {order['qty']} dona - {order['status']}" for i, order in enumerate(USER_ORDERS[user_id])])
-    await call.message.edit_text(f"Sizning buyurtmalaringiz:\n{orders_list}", reply_markup=get_main_menu())
-@router.callback_query(F.data == "help")
-async def help_command(call: types.CallbackQuery):
-    await call.message.edit_text("Yordam:\n- Yangi buyurtma berish uchun tugmani bosing.\n- Buyurtma jarayoni: ID → Son → Toʻlov cheki.\n- Savollar boʻlsa admin ga yozing.", reply_markup=get_main_menu())
+
+# ================== CALLBACKS ==================
+@router.callback_query(lambda c: c.data.startswith("confirm_"))
+async def confirm_order(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return await callback.answer("Ruxsat yo‘q", show_alert=True)
+
+    _, user_id, product_id, qty = callback.data.split("_")
+    product = PRODUCTS[product_id]
+    total = int(qty) * product["price"]
+
+    await bot.send_message(
+        int(user_id),
+        f"🎉 Buyurtma tasdiqlandi!\n"
+        f"{product['name']} — {qty} dona\n"
+        f"Jami: {total:,} UZS"
+    )
+
+    await callback.message.edit_reply_markup(None)
+    await callback.message.edit_text(callback.message.text + "\n\n✅ TASDIQLANDI")
+    await callback.answer()
+
+@router.callback_query(lambda c: c.data.startswith("reject_"))
+async def reject_order(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return await callback.answer("Ruxsat yo‘q", show_alert=True)
+
+    user_id = callback.data.split("_")[1]
+    await bot.send_message(int(user_id), "❌ Buyurtma rad etildi.")
+    await callback.message.edit_reply_markup(None)
+    await callback.message.edit_text(callback.message.text + "\n\n❌ RAD ETILDI")
+    await callback.answer()
+
+# ================== RUN ==================
 dp.include_router(router)
+
 async def main():
-    print("Bot ishga tushmoqda...")
+    print("🤖 Bot ishga tushdi")
     await dp.start_polling(bot)
+
 if __name__ == "__main__":
     asyncio.run(main())
