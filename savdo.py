@@ -198,6 +198,14 @@ async def select_edit_product(call: types.CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.in_(["edit_price", "edit_max"]))
 async def edit_field(call: types.CallbackQuery, state: FSMContext):
+    field = call.data.split("_")[1]  # "price" yoki "max" ni oladi
+    await state.update_data(edit_field=field)
+    texts = {
+        "price": "Yangi narxni kiriting (chegirma uchun pastroq narx):",
+        "max": "Yangi maks sonni kiriting (tugagan bo'lsa 0):"
+    }
+    await state.set_state(OrderStates.admin_edit_value)
+    await call.message.edit_text(texts.get(field, "Yangi qiymatni kiriting:"))
     field = call.data.split("_")[1]
     await state.update_data(edit_field=field)
     texts = {"price": "Yangi narx (chegirma):", "max": "Yangi maks son (0 = tugagan):"}
