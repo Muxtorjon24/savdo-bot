@@ -36,7 +36,6 @@ class OrderStates(StatesGroup):
     admin_add_price = State()
     admin_add_max = State()
     admin_add_post = State()
-    admin_delete_product = State()
 def get_main_menu():
     buttons = [
         [
@@ -46,7 +45,7 @@ def get_main_menu():
         [InlineKeyboardButton(text="🛍️ Yangi buyurtma berish", callback_data="new_order")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-@router.message(Command("start", "neworder"))
+@router.message(Command("start"))
 async def start_command(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("Assalomu alaykum! Kerakli bo'limni tanlang:", reply_markup=get_main_menu())
@@ -54,6 +53,10 @@ async def start_command(message: types.Message, state: FSMContext):
 async def start_new_order(call: types.CallbackQuery, state: FSMContext):
     await state.set_state(OrderStates.waiting_for_product_id)
     await call.message.edit_text("Mahsulot ID sini kiriting (Masalan: MF1):", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back")]]))
+@router.message(Command("neworder"))
+async def new_order_command(message: types.Message, state: FSMContext):
+    await state.set_state(OrderStates.waiting_for_product_id)
+    await message.answer("Yangi buyurtma! Mahsulot ID sini kiriting (Masalan: MF1):", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back")]]))
 @router.message(OrderStates.waiting_for_product_id)
 async def id_received(message: types.Message, state: FSMContext):
     p_id = message.text.strip().upper()
@@ -121,7 +124,6 @@ async def my_status(call: types.CallbackQuery):
 @router.callback_query(F.data == "help")
 async def help_command(call: types.CallbackQuery):
     await call.message.edit_text("Yordam:\n- Yangi buyurtma berish uchun tugmani bosing.\n- Buyurtma jarayoni: ID → Son → Toʻlov cheki.\n- Savollar boʻlsa admin ga yozing.", reply_markup=get_main_menu())
-# Admin panel
 @router.message(Command("admin"))
 async def admin_panel(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
@@ -129,8 +131,7 @@ async def admin_panel(message: types.Message, state: FSMContext):
         return
     products_list = "\n".join([f"{id}: {p['name']} - {p['price']:,} UZS (post_id: {p['post_id']})" for id, p in PRODUCTS.items()])
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Yangi mahsulot qo'shish", callback_data="add_product")],
-        [InlineKeyboardButton(text="🗑️ Mahsulot o'chirish", callback_data="delete_product")]
+        [InlineKeyboardButton(text="➕ Yangi mahsulot qo'shish", callback_data="add_product")]
     ])
     await message.answer(f"Admin panel:\n\nMavjud mahsulotlar:\n{products_list}\n\nNima qilmoqchisiz?", reply_markup=kb)
 @router.callback_query(F.data == "add_product")
@@ -191,27 +192,13 @@ async def add_post(message: types.Message, state: FSMContext):
     }
     await message.answer(f"✅ Yangi mahsulot qo'shildi: {data['new_id']}")
     await state.clear()
-@router.callback_query(F.data == "delete_product")
-async def start_delete_product(call: types.CallbackQuery, state: FSMContext):
-    if call.from_user.id != ADMIN_ID:
+@router.message(Command("new"))
+async def new_product_command(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("Siz admin emassiz!")
         return
-    kb = InlineKeyboardMarkup(inline_keyboard=[])
-    for p_id in PRODUCTS:
-        kb.inline_keyboard.append([InlineKeyboardButton(text=f"{p_id} - {PRODUCTS[p_id]['name']}", callback_data=f"del_{p_id}")])
-    kb.inline_keyboard.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin_back")])
-    await call.message.edit_text("O'chirmoqchi bo'lgan mahsulotni tanlang:", reply_markup=kb)
-@router.callback_query(F.data.startswith("del_"))
-async def delete_product(call: types.CallbackQuery, state: FSMContext):
-    if call.from_user.id != ADMIN_ID:
-        return
-    p_id = call.data.split("_")[1]
-    if p_id in PRODUCTS:
-        del PRODUCTS[p_id]
-        await call.message.edit_text(f"✅ {p_id} mahsuloti o'chirildi!", reply_markup=get_main_menu())
-    await state.clear()
-@router.callback_query(F.data == "admin_back")
-async def admin_back(call: types.CallbackQuery, state: FSMContext):
-    await admin_panel(call.message, state)
+    await state.set_state(OrderStates.admin_add_id)
+    await message.answer("Yangi mahsulot ID sini kiriting (masalan: MF8):")
 dp.include_router(router)
 async def main():
     print("Bot ishga tushmoqda...")
