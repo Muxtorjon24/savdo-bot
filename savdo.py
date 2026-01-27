@@ -78,7 +78,7 @@ async def id_received(message: types.Message, state: FSMContext):
     
     try:
         await bot.forward_message(message.chat.id, CHANNEL_ID, product["post_id"])
-        await asyncio.sleep(1)  # postdan keyin matn chiqishi uchun ozgina kutish
+        await asyncio.sleep(1)
         await message.answer(f"Hozirda narxi chegirmada: {product['price']:,} UZS")
     except Exception as e:
         print(f"Forward xatosi: {e}")
@@ -173,6 +173,66 @@ async def start_add_product(call: types.CallbackQuery, state: FSMContext):
     await state.set_state(OrderStates.admin_add_id)
     await call.message.edit_text("Yangi mahsulot ID sini kiriting (masalan: MF8):")
 
+@router.message(OrderStates.admin_add_id)
+async def add_id(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    p_id = message.text.strip().upper()
+    if p_id in PRODUCTS:
+        await message.answer("Bunday ID allaqachon mavjud!")
+        return
+    await state.update_data(new_id=p_id)
+    await state.set_state(OrderStates.admin_add_name)
+    await message.answer("Mahsulot nomini kiriting:")
+
+@router.message(OrderStates.admin_add_name)
+async def add_name(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.update_data(name=message.text)
+    await state.set_state(OrderStates.admin_add_price)
+    await message.answer("Narxini kiriting (raqam):")
+
+@router.message(OrderStates.admin_add_price)
+async def add_price(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if not message.text.isdigit():
+        await message.answer("Faqat raqam kiriting!")
+        return
+    await state.update_data(price=int(message.text))
+    await state.set_state(OrderStates.admin_add_max)
+    await message.answer("Maksimal sonini kiriting:")
+
+@router.message(OrderStates.admin_add_max)
+async def add_max(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if not message.text.isdigit():
+        await message.answer("Faqat raqam kiriting!")
+        return
+    await state.update_data(max_quantity=int(message.text))
+    await state.set_state(OrderStates.admin_add_post)
+    await message.answer("Kanal post ID sini kiriting (raqam):")
+
+@router.message(OrderStates.admin_add_post)
+async def add_post(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if not message.text.isdigit():
+        await message.answer("Faqat raqam kiriting!")
+        return
+    data = await state.get_data()
+    PRODUCTS[data['new_id']] = {
+        "name": data['name'],
+        "price": data['price'],
+        "max_quantity": data['max_quantity'],
+        "post_id": int(message.text)
+    }
+    await message.answer(f"✅ Yangi mahsulot qo'shildi: {data['new_id']}")
+    await state.clear()
+    await admin_panel(message, state)
+
 # Tahrirlash
 @router.callback_query(F.data == "edit_product")
 async def start_edit_product(call: types.CallbackQuery, state: FSMContext):
@@ -198,7 +258,7 @@ async def select_edit_product(call: types.CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.in_(["edit_price", "edit_max"]))
 async def edit_field(call: types.CallbackQuery, state: FSMContext):
-    field = call.data.split("_")[1]  # "price" yoki "max" ni oladi
+    field = call.data.split("_")[1]
     await state.update_data(edit_field=field)
     texts = {
         "price": "Yangi narxni kiriting (chegirma uchun pastroq narx):",
@@ -206,11 +266,6 @@ async def edit_field(call: types.CallbackQuery, state: FSMContext):
     }
     await state.set_state(OrderStates.admin_edit_value)
     await call.message.edit_text(texts.get(field, "Yangi qiymatni kiriting:"))
-    field = call.data.split("_")[1]
-    await state.update_data(edit_field=field)
-    texts = {"price": "Yangi narx (chegirma):", "max": "Yangi maks son (0 = tugagan):"}
-    await state.set_state(OrderStates.admin_edit_value)
-    await call.message.edit_text(texts.get(field, "Yangi qiymat kiriting:"))
 
 @router.message(OrderStates.admin_edit_value)
 async def edit_value(message: types.Message, state: FSMContext):
@@ -227,8 +282,37 @@ async def edit_value(message: types.Message, state: FSMContext):
     await state.clear()
     await admin_panel(message, state)
 
-# O'chirish (avvalgi kodda bor, saqlanadi)
-# ... (qolgan kod: o'chirish, tasdiqlash va boshqalar avvalgidek)
+@router.callback_query(F.data == "edit_back")
+async def edit_back(call: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await admin_panel(call.message, state)
+
+# O'chirish
+@router.callback_query(F.data == "delete_product")
+async def start_delete_product(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[])
+    for p_id in PRODUCTS:
+        kb.inline_keyboard.append([InlineKeyboardButton(text=f"{p_id} - {PRODUCTS[p_id]['name']}", callback_data=f"del_{p_id}")])
+    kb.inline_keyboard.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin_back")])
+    await call.message.edit_text("O'chirmoqchi bo'lgan mahsulotni tanlang:", reply_markup=kb)
+
+@router.callback_query(F.data.startswith("del_"))
+async def delete_product(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        return
+    p_id = call.data.split("_")[1]
+    if p_id in PRODUCTS:
+        del PRODUCTS[p_id]
+        await call.message.edit_text(f"✅ {p_id} mahsuloti o'chirildi!", reply_markup=get_main_menu())
+    else:
+        await call.message.edit_text("Mahsulot topilmadi!")
+
+@router.callback_query(F.data == "admin_back")
+async def admin_back(call: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await admin_panel(call.message, state)
 
 dp.include_router(router)
 
